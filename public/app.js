@@ -357,6 +357,7 @@
         <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
         <div id="err"></div>
         <button class="btn" type="submit">Log in</button>
+        <span class="muted"><a href="#/forgot">Forgot your password?</a></span>
         <span class="muted">New here? <a href="#/register">Create an account</a></span>
       </form>`;
     document.getElementById('f').onsubmit = async (e) => {
@@ -376,6 +377,65 @@
         }
         await afterSignedIn('Welcome back!');
       } catch (err) { document.getElementById('err').innerHTML = errBox(err.message || 'Could not log in.'); btn.disabled = false; }
+    };
+  }
+
+  // Forgot password: email -> code + new password
+  function viewForgot(params) {
+    $app.innerHTML = `<h1>Reset your password</h1>
+      <form id="ff" class="stack card">
+        <p style="margin:0" id="fp-intro">Enter your account email and we will send you a 6-digit code.</p>
+        <label>Email<input name="email" type="email" autocomplete="username" value="${esc(params.get('email') || '')}" required></label>
+        <div id="step2" hidden>
+          <label>Code from your email<input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></label>
+          <label>New password (min 8 characters)<input name="password" type="password" minlength="8" autocomplete="new-password"></label>
+        </div>
+        <div id="err"></div>
+        <button class="btn" type="submit" id="fp-go">Send code</button>
+        <button class="btn secondary" type="button" id="fp-resend" hidden>Resend code</button>
+        <span class="muted"><a href="#/login">Back to log in</a></span>
+      </form>`;
+    const f = document.getElementById('ff'), box = document.getElementById('err');
+    let sent = false;
+    const sendReset = async (email) => {
+      authReady();
+      const tries = [
+        () => state.auth.emailOtp.requestPasswordReset({ email }),
+        () => state.auth.emailOtp.sendVerificationOtp({ email, type: 'forget-password' }),
+      ];
+      let lastErr = null;
+      for (const run of tries) {
+        try { const r = await run(); if (!(r && r.error)) return; lastErr = r.error; } catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error('Could not send the code.');
+    };
+    const showStep2 = () => {
+      sent = true;
+      document.getElementById('step2').hidden = false;
+      document.getElementById('fp-resend').hidden = false;
+      f.code.required = true; f.password.required = true;
+      document.getElementById('fp-go').textContent = 'Change password';
+      document.getElementById('fp-intro').textContent = 'If that email has an account, a code is on its way (check spam too). Enter it with your new password.';
+    };
+    document.getElementById('fp-resend').onclick = async () => {
+      try { await sendReset(f.email.value.trim()); box.innerHTML = '<div class="notice">A new code is on its way.</div>'; }
+      catch (err) { box.innerHTML = errBox(sendErrText(err)); }
+    };
+    f.onsubmit = async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('fp-go'); btn.disabled = true;
+      const email = f.email.value.trim();
+      try {
+        if (!sent) { await sendReset(email); showStep2(); box.innerHTML = ''; }
+        else {
+          authReady();
+          const { error } = await state.auth.emailOtp.resetPassword({ email, otp: f.code.value.trim(), password: f.password.value });
+          if (error) throw error;
+          toast('Password changed. Please log in.');
+          location.hash = '#/login';
+        }
+      } catch (err) { box.innerHTML = errBox(sent ? ((err.message || 'That code did not work.') + ' Use the newest code.') : sendErrText(err)); }
+      btn.disabled = false;
     };
   }
 
@@ -471,7 +531,24 @@
           <label>Address<textarea name="address">${esc(u.address)}</textarea></label>
           <div id="pf-msg"></div><button class="btn" type="submit">Save changes</button>
         </form>
+        <form id="pw" class="stack card">
+          <h2 style="margin:0">Change password</h2>
+          <label>Current password<input name="cur" type="password" autocomplete="current-password" required></label>
+          <label>New password (min 8 characters)<input name="neu" type="password" minlength="8" autocomplete="new-password" required></label>
+          <div id="pw-msg"></div><button class="btn" type="submit">Change password</button>
+        </form>
       </div>`;
+    document.getElementById('pw').onsubmit = async (e) => {
+      e.preventDefault();
+      const f = e.target, msg = document.getElementById('pw-msg'), btn = f.querySelector('button'); btn.disabled = true;
+      try {
+        authReady();
+        const { error } = await state.auth.changePassword({ currentPassword: f.cur.value, newPassword: f.neu.value, revokeOtherSessions: true });
+        if (error) throw error;
+        f.reset(); msg.innerHTML = '<div class="notice">Password changed.</div>'; toast('Password changed');
+      } catch (err) { msg.innerHTML = errBox(err.message || 'Could not change the password.'); }
+      btn.disabled = false;
+    };
     document.getElementById('pf').onsubmit = async (e) => {
       e.preventDefault();
       try { const r = await api('/profile', { method: 'PUT', body: Object.fromEntries(new FormData(e.target)) }); state.user = r.user; toast('Profile saved'); document.getElementById('pf-msg').innerHTML = ''; }
@@ -734,6 +811,7 @@
       else if (first === 'login') viewLogin();
       else if (first === 'register') viewRegister();
       else if (first === 'verify') viewVerify(params);
+      else if (first === 'forgot') viewForgot(params);
       else if (first === 'profile') viewProfile();
       else if (first === 'orders') await viewOrders();
       else if (first === 'chat') await viewChat();

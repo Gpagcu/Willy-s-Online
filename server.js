@@ -216,7 +216,7 @@ app.get('/api/products', wrap(async (req, res) => {
   const where = ['active = TRUE'];
   if (q) { params.push(`%${q}%`); where.push(`(name ILIKE $${params.length} OR description ILIKE $${params.length} OR sku ILIKE $${params.length})`); }
   if (category) { params.push(category); where.push(`category = $${params.length}`); }
-  const r = await query(`SELECT id,name,sku,category,description,price,stock,image_url, ${VARIANTS_SQL} FROM products WHERE ${where.join(' AND ')} ORDER BY category, name`, params);
+  const r = await query(`SELECT id,name,sku,category,description,price,stock,image_url,images, ${VARIANTS_SQL} FROM products WHERE ${where.join(' AND ')} ORDER BY category, name`, params);
   res.json({ products: r.rows });
 }));
 
@@ -346,6 +346,7 @@ const productFields = (b) => ({
   stock: parseInt(b.stock, 10),
   low: parseInt(b.low_stock_alert, 10),
   image: clean(b.image_url, 500),
+  images: Array.isArray(b.images) ? b.images.map((x) => clean(x, 500)).filter(Boolean) : [],
   active: b.active === false || b.active === 'false' ? false : true,
 });
 function checkProduct(p) {
@@ -353,7 +354,10 @@ function checkProduct(p) {
   if (!(p.price >= 0)) return 'Price must be 0 or more.';
   if (!Number.isInteger(p.stock) || p.stock < 0) return 'Stock must be 0 or more.';
   // Photo must be one of our own uploads, or a direct http(s) link to a picture
-  if (p.image && !/^(https?:\/\/\S+|\/api\/images\/[a-f0-9]{32})$/i.test(p.image)) return 'Photo link must start with https:// (or use "Upload a photo").';
+  const okPhoto = (u) => /^(https?:\/\/\S+|\/api\/images\/[a-f0-9]{32})$/i.test(u);
+  if (p.image && !okPhoto(p.image)) return 'Photo link must start with https:// (or use "Upload a photo").';
+  if (p.images.length > 8) return 'Please use 8 extra photos or fewer.';
+  if (p.images.some((u) => !okPhoto(u))) return 'Every photo link must start with https:// (or be an uploaded photo).';
   return null;
 }
 
@@ -409,9 +413,9 @@ app.post('/api/admin/products', auth, adminOnly, wrap(async (req, res) => {
   try {
     await client.query('BEGIN');
     const r = await client.query(
-      `INSERT INTO products (name,sku,category,description,price,stock,low_stock_alert,image_url,active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active]);
+      `INSERT INTO products (name,sku,category,description,price,stock,low_stock_alert,image_url,active,images)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) RETURNING id`,
+      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active, JSON.stringify(p.images)]);
     if (vars && vars.length) await syncVariants(client, r.rows[0].id, vars, p.stock);
     const product = await productWithVariants(client, r.rows[0].id);
     await client.query('COMMIT');
@@ -437,8 +441,8 @@ app.put('/api/admin/products/:id', auth, adminOnly, wrap(async (req, res) => {
     const lock = await client.query('SELECT id FROM products WHERE id=$1 FOR UPDATE', [id]);
     if (!lock.rows.length) { await client.query('ROLLBACK'); return bad(res, 'Product not found.', 404); }
     await client.query(
-      `UPDATE products SET name=$1,sku=$2,category=$3,description=$4,price=$5,stock=$6,low_stock_alert=$7,image_url=$8,active=$9 WHERE id=$10`,
-      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active, id]);
+      `UPDATE products SET name=$1,sku=$2,category=$3,description=$4,price=$5,stock=$6,low_stock_alert=$7,image_url=$8,active=$9,images=$10::jsonb WHERE id=$11`,
+      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active, JSON.stringify(p.images), id]);
     if (vars) await syncVariants(client, id, vars, p.stock);
     else await client.query('UPDATE products p SET stock=(SELECT COALESCE(SUM(v.stock),0) FROM product_variants v WHERE v.product_id=p.id) WHERE p.id=$1 AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id=p.id)', [id]);
     const product = await productWithVariants(client, id);

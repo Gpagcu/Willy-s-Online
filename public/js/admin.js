@@ -52,24 +52,45 @@ async function viewAdminProducts() {
       <div id="opts"></div>
       <div><button type="button" class="btn secondary small" id="opt-add">+ Add option</button></div>
     </div>
-      <div class="two"><label>Low-stock alert at<input name="low_stock_alert" type="number" min="0" value="${esc(p.low_stock_alert)}"></label><label>Photo<input name="image_url" id="img-url" value="${esc(p.image_url || '')}" placeholder="Upload below, or paste a direct image link (https://…)"></label></div>
-      <div class="row"><button type="button" class="btn secondary small" id="img-pick">&#128247; Upload a photo</button><input type="file" id="img-file" accept="image/*" hidden><span id="img-note" class="muted" style="font-size:13px"></span><img id="img-prev" alt="" style="height:56px;border-radius:6px;${p.image_url ? '' : 'display:none'}" src="${esc(p.image_url || '')}"></div>
+      <div class="two"><label>Low-stock alert at<input name="low_stock_alert" type="number" min="0" value="${esc(p.low_stock_alert)}"></label></div>
+      <div class="card stack" style="background:#fffdf8">
+        <b>Photos</b>
+        <span class="muted" style="font-size:13px">The first photo is the main one shown in the shop. Add up to 9 photos. Upload from your phone or computer, or paste a direct https:// image link.</span>
+        <div id="photos" class="photo-list"></div>
+        <div class="row"><button type="button" class="btn secondary small" id="img-pick">&#128247; Upload photos</button><input type="file" id="img-file" accept="image/*" multiple hidden><span id="img-note" class="muted" style="font-size:13px"></span></div>
+        <div class="row" style="gap:8px"><input id="img-link" placeholder="…or paste an image link (https://…)" style="flex:1"><button type="button" class="btn secondary small" id="img-link-add">Add link</button></div>
+      </div>
       <label class="row" style="flex-direction:row;align-items:center"><input type="checkbox" name="active" style="width:auto" ${p.active ? 'checked' : ''}> Visible in the shop</label>
       <datalist id="cats">${[...new Set(r.products.map((x) => x.category))].map((c) => `<option value="${esc(c)}">`).join('')}</datalist>
       <div id="pe-err"></div>
       <div class="row"><button class="btn" type="submit">Save</button><button class="btn secondary" type="button" id="cancel">Cancel</button>${p.id ? '<button class="btn danger" type="button" id="hide">Hide product</button>' : ''}</div>
     </form>`;
     document.getElementById('editor').scrollIntoView({ behavior: 'smooth' });
-    const imgUrl = document.getElementById('img-url'), imgPrev = document.getElementById('img-prev'), imgNote = document.getElementById('img-note'), imgFile = document.getElementById('img-file');
-    const syncPrev = () => { if (imgUrl.value.trim()) { imgPrev.src = imgUrl.value.trim(); imgPrev.style.display = ''; } else imgPrev.style.display = 'none'; };
-    imgUrl.oninput = syncPrev;
+    // photos[0] is the main photo (saved as image_url); the rest are saved as images
+    const photos = [p.image_url, ...(p.images || [])].filter(Boolean);
+    const photoBox = document.getElementById('photos'), imgNote = document.getElementById('img-note'), imgFile = document.getElementById('img-file'), imgLink = document.getElementById('img-link');
+    const drawPhotos = () => {
+      photoBox.innerHTML = photos.map((u, n) => `<div class="photo-item"><img src="${esc(u)}" alt="Photo ${n + 1}">${n === 0 ? '<span class="chip ok">Main</span>' : `<button type="button" class="btn small secondary" data-pm="${n}">Make main</button>`}<button type="button" class="btn small danger" data-px="${n}" aria-label="Remove photo">✕</button></div>`).join('') || '<span class="muted">No photos yet.</span>';
+      photoBox.querySelectorAll('[data-pm]').forEach((b) => b.onclick = () => { const [u] = photos.splice(Number(b.dataset.pm), 1); photos.unshift(u); drawPhotos(); });
+      photoBox.querySelectorAll('[data-px]').forEach((b) => b.onclick = () => { photos.splice(Number(b.dataset.px), 1); drawPhotos(); });
+    };
+    const addPhoto = (u) => { if (photos.length >= 9) { imgNote.textContent = 'Maximum 9 photos.'; return false; } if (!photos.includes(u)) photos.push(u); drawPhotos(); return true; };
     document.getElementById('img-pick').onclick = () => imgFile.click();
     imgFile.onchange = async () => {
-      const f = imgFile.files[0]; imgFile.value = ''; if (!f) return;
-      imgNote.textContent = 'Uploading…';
-      try { const up = await uploadPhoto(f); imgUrl.value = up.url; syncPrev(); imgNote.textContent = 'Uploaded.'; }
-      catch (err) { imgNote.textContent = ''; document.getElementById('pe-err').innerHTML = errBox(err.message); }
+      const files = [...imgFile.files]; imgFile.value = ''; if (!files.length) return;
+      for (const [n, f] of files.entries()) {
+        imgNote.textContent = `Uploading ${n + 1} of ${files.length}…`;
+        try { const up = await uploadPhoto(f); if (!addPhoto(up.url)) return; }
+        catch (err) { imgNote.textContent = ''; document.getElementById('pe-err').innerHTML = errBox(err.message); return; }
+      }
+      imgNote.textContent = 'Uploaded.';
     };
+    document.getElementById('img-link-add').onclick = () => {
+      const u = imgLink.value.trim(); if (!u) return;
+      if (!/^https:\/\/\S+$/i.test(u)) { imgNote.textContent = 'The link must start with https://'; return; }
+      if (addPhoto(u)) { imgLink.value = ''; imgNote.textContent = ''; }
+    };
+    drawPhotos();
     const opts = (p.variants || []).map((v) => ({ id: v.id, label: v.label, stock: v.stock }));
     const optBox = document.getElementById('opts'), stockIn = document.getElementById('stock-in');
     const drawOpts = () => {
@@ -88,6 +109,7 @@ async function viewAdminProducts() {
     document.getElementById('pe').onsubmit = async (e) => {
       e.preventDefault();
       const fd = Object.fromEntries(new FormData(e.target)); fd.active = e.target.active.checked;
+    fd.image_url = photos[0] || ''; fd.images = photos.slice(1);
     fd.variants = opts.map((o) => ({ id: o.id, label: o.label, stock: o.stock }));
       try { await api(p.id ? '/admin/products/' + p.id : '/admin/products', { method: p.id ? 'PUT' : 'POST', body: fd }); toast('Saved'); viewAdminProducts(); }
       catch (err) { document.getElementById('pe-err').innerHTML = errBox(err.message); }

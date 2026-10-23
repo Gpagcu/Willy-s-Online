@@ -85,4 +85,5 @@ CREATE TABLE IF NOT EXISTS product_variants (
   stock INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
   UNIQUE (product_id, label)
 );
+ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE order_items ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id) ON DELETE SET NULL;

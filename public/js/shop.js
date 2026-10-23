@@ -77,6 +77,11 @@ async function viewShop(params) {
 
 // "Add to cart" buttons. If the product has sizes/colors, use the one picked in the card.
 function bindAddButtons(root, list) {
+  root.querySelectorAll('[data-open]').forEach((el) => {
+    const open = () => openProductModal(list.find((x) => x.id === Number(el.dataset.open)), el);
+    el.onclick = open;
+    el.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } };
+  });
   root.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => {
     const p = list.find((x) => x.id === Number(b.dataset.add)); if (!p) return;
     if (p.variants && p.variants.length) {
@@ -94,9 +99,9 @@ function productCard(p) {
   const vs = p.variants || [];
   const img = p.image_url ? `<img src="${esc(p.image_url)}" alt="${esc(p.name)}" loading="lazy">` : '🧰';
   return `<div class="card product">
-    <div class="img">${img}</div>
+    <div class="img" data-open="${p.id}" role="button" tabindex="0" aria-label="View ${esc(p.name)}">${img}</div>
     <span class="chip">${esc(p.category)}</span>
-    <h3>${esc(p.name)}</h3>
+    <h3 data-open="${p.id}" style="cursor:pointer">${esc(p.name)}</h3>
     <div class="muted" style="font-size:13px">${esc(p.description)}</div>
     <div class="row" style="justify-content:space-between"><span class="price">${peso(p.price)}</span>${stock}</div>
     ${vs.length ? `<select data-opt="${p.id}" aria-label="Choose option"><option value="">Choose option…</option>${vs.map((v) => `<option value="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${esc(v.label)}${v.stock <= 0 ? ' (sold out)' : ''}</option>`).join('')}</select>` : ''}

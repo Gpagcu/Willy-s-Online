@@ -52,6 +52,7 @@ $burger.onclick = () => {
 };
 $nav.addEventListener('click', (e) => { if (e.target.closest('a,button')) closeMenu(); });
 window.addEventListener('hashchange', closeMenu);
+window.addEventListener('hashchange', closeProductModal);
 window.addEventListener('hashchange', route);
 
 (async function boot() {

@@ -1,0 +1,23 @@
+{
+  "name": "willys-leather-craft-pos",
+  "version": "1.0.0",
+  "description": "Online store + POS for Willy's Leather Craft & Military Clothing",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "build": "esbuild auth-client-src.js --bundle --format=iife --minify --outfile=public/neon-auth.js",
+    "postinstall": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@neondatabase/auth": "^0.6.0-beta",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "jose": "^5.10.0",
+    "pg": "^8.12.0",
+    "esbuild": "^0.28.2"
+  }
+}

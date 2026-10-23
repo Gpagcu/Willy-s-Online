@@ -426,6 +426,46 @@ app.get('/api/admin/stats', auth, adminOnly, wrap(async (req, res) => {
   res.json({ today: today.rows[0], month: month.rows[0], pending: pending.rows[0].n, lowStock: low.rows, topProducts: top.rows });
 }));
 
+// ---------- admin: sales reports ----------
+// Dates are Philippine time (Asia/Manila). Cancelled orders are not counted as sales.
+app.get('/api/admin/reports', auth, adminOnly, wrap(async (req, res) => {
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !Number.isNaN(Date.parse(v));
+  const todayRow = await query("SELECT (now() AT TIME ZONE 'Asia/Manila')::date::text AS d, ((now() AT TIME ZONE 'Asia/Manila')::date - 29)::text AS d30");
+  const to = isDate(req.query.to) ? req.query.to : todayRow.rows[0].d;
+  const from = isDate(req.query.from) ? req.query.from : todayRow.rows[0].d30;
+  if (from > to) return bad(res, 'The start date must be before the end date.');
+  const days = (Date.parse(to) - Date.parse(from)) / 86400000 + 1;
+  if (days > 366) return bad(res, 'Please choose a range of one year or less.');
+  const range = "o.status<>'cancelled' AND (o.created_at AT TIME ZONE 'Asia/Manila')::date BETWEEN $1::date AND $2::date";
+  const p = [from, to];
+  const [sum, byDay, byMethod, bySource, top, orders] = await Promise.all([
+    query(`SELECT COALESCE(SUM(total),0) AS revenue, COUNT(*)::int AS orders,
+             COALESCE(SUM(total) FILTER (WHERE payment_status='paid'),0) AS collected,
+             COALESCE(SUM(total) FILTER (WHERE payment_status='unpaid'),0) AS outstanding,
+             (SELECT COALESCE(SUM(i.qty),0)::int FROM order_items i JOIN orders o2 ON o2.id=i.order_id
+               WHERE o2.status<>'cancelled' AND (o2.created_at AT TIME ZONE 'Asia/Manila')::date BETWEEN $1::date AND $2::date) AS items
+           FROM orders o WHERE ${range}`, p),
+    query(`SELECT d::date::text AS day, COALESCE(SUM(o.total),0) AS revenue, COUNT(o.id)::int AS orders
+           FROM generate_series($1::date, $2::date, interval '1 day') d
+           LEFT JOIN orders o ON (o.created_at AT TIME ZONE 'Asia/Manila')::date = d::date AND o.status<>'cancelled'
+           GROUP BY d ORDER BY d`, p),
+    query(`SELECT payment_method AS method, COUNT(*)::int AS orders, SUM(total) AS revenue FROM orders o WHERE ${range} GROUP BY payment_method ORDER BY revenue DESC`, p),
+    query(`SELECT source, COUNT(*)::int AS orders, SUM(total) AS revenue FROM orders o WHERE ${range} GROUP BY source ORDER BY source`, p),
+    query(`SELECT i.name, SUM(i.qty)::int AS sold, SUM(i.qty*i.price) AS revenue
+           FROM order_items i JOIN orders o ON o.id=i.order_id WHERE ${range}
+           GROUP BY i.name ORDER BY revenue DESC LIMIT 15`, p),
+    query(`SELECT o.id, to_char(o.created_at AT TIME ZONE 'Asia/Manila','YYYY-MM-DD HH24:MI') AS date, o.source, o.customer_name,
+             o.payment_method, o.payment_status, o.status, o.total
+           FROM orders o WHERE ${range} ORDER BY o.id LIMIT 5000`, p),
+  ]);
+  const s = sum.rows[0];
+  res.json({
+    from, to,
+    summary: { ...s, average: s.orders ? Number(s.revenue) / s.orders : 0 },
+    byDay: byDay.rows, byMethod: byMethod.rows, bySource: bySource.rows, topProducts: top.rows, orders: orders.rows,
+  });
+}));
+
 // ---------- admin: chat ----------
 app.get('/api/admin/chat/threads', auth, adminOnly, wrap(async (req, res) => {
   const r = await query(`

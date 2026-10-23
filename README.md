@@ -61,7 +61,8 @@ To make another admin later, after they have logged in once:
 
 - **Customers:** sign up, browse/search, add to cart, check out. For GCash/Maya/Bank transfer they send the payment and type the reference number.
 - **Admin > Orders:** mark payment "paid", move orders to confirmed/shipped/completed. Cancelling puts the stock back.
-- **Admin > POS:** walk-in sales with change calculation and a printable receipt. Stock goes down automatically.
+- **Admin > POS:** walk-in sales. Tap any number of products to build one sale, change the quantity or the price of any line (for haggling), add an extra discount, take cash (change is calculated) or GCash/Maya/bank, then print a standard 80 mm receipt. Stock goes down automatically. To print, pick your receipt printer in the print window and turn off "Headers and footers"; the receipt prints alone, without the product list.
+- **Receipt details:** set `RECEIPT_ADDRESS`, `RECEIPT_PHONE` and `RECEIPT_FOOTER` in `.env` (and in Render's environment variables) to show your address, phone and thank-you line on receipts.
 - **Admin > Chat:** reply to customers.
 
 ## E. Publish (Render)
@@ -75,10 +76,15 @@ To make another admin later, after they have logged in once:
 ## Photos
 
 - **Chat:** the camera button next to the message box lets customers and the admin send a picture (shrunk to 1280px automatically).
-- **Products:** in Admin > Products use **Upload a photo**, or paste a direct image link.
+- **Products:** in Admin > Products each product can have up to 9 photos. Use **Upload photos** (pick several at once) or paste a direct image link. The first photo is the main one; use **Make main** to change it.
+- **Product pop-up:** in the shop, tapping a product's picture or name opens a pop-up with all its photos, the description, size/color choice, Add to cart, and a "You may also like" row (same category first).
 - **Supported photo links:** a direct, public `https://` link to the picture file itself (ends in .jpg, .jpeg, .png, .webp or .gif, and opens as just the picture in a new tab). These do NOT work: page links (Facebook posts, Pinterest pins, `imgur.com/abc` pages, Google Drive share links), links that need a login, and `http://` links. Easiest: just use **Upload a photo**.
 - Photos are stored in your Neon database (table `images`), so they survive re-deploys. They count toward your Neon storage.
 - Photo links are long random addresses that cannot be guessed, but anyone who has a link can open it.
+
+## Sizes and colors
+
+In Admin > Products, open a product and use **Sizes / colors**: add one row per option (for example "Small", "Medium", or "Woodland - L") with its own stock. Customers pick an option on the product card before adding to cart, the POS lists each option as its own button, and cancelling an order puts the stock back on the right option. When a product has options, its Stock number is the total of the options. Remove every option row to go back to a single stock number.
 
 ## Troubleshooting
 
@@ -119,7 +125,8 @@ public/js/           the site's code, one file per topic (see below)
 | `core.js` | shared helpers, app state, toast messages, cart helpers |
 | `api.js` | login token, talking to the server, photo upload |
 | `nav.js` | top menu, unread chat badge |
-| `shop.js` | home page, shop and search, cart, checkout |
+| `shop.js` | home page, shop and search, product cards, cart, checkout |
+| `product-modal.js` | the product pop-up with photos and recommendations |
 | `auth.js` | sign up, log in, verify email, forgot password |
 | `account.js` | My profile, My orders (payment proof button) |
 | `chat.js` | customer chat and the admin chat inbox |

@@ -110,7 +110,7 @@ const adminOnly = (req, res, next) =>
   req.user.role === 'admin' ? next() : bad(res, 'Admin access only.', 403);
 
 // Create an order inside a transaction, locking stock rows so you can't oversell
-async function createOrder({ userId, source, customer, payment, items, note }) {
+async function createOrder({ userId, source, customer, payment, items, note, discount }) {
   const fail = (m) => Object.assign(new Error(m), { status: 400 });
   if (!Array.isArray(items) || !items.length) throw fail('Cart is empty.');
   const merged = new Map(); // "productId:variantId" -> { id, vid, qty }
@@ -119,8 +119,14 @@ async function createOrder({ userId, source, customer, payment, items, note }) {
     const vid = parseInt(it.variant_id, 10) || 0;
     const qty = parseInt(it.qty, 10);
     if (!id || !qty || qty < 1 || qty > 999) throw fail('Invalid item in cart.');
-    const key = id + ':' + vid;
-    const cur = merged.get(key) || { id, vid, qty: 0 };
+    // Only the in-store POS may set its own (haggled) price
+    let price = null;
+    if (source === 'pos' && it.price !== undefined && it.price !== null && it.price !== '') {
+      price = Math.round(Number(it.price) * 100) / 100;
+      if (!(price >= 0) || price > 10000000) throw fail('Invalid price.');
+    }
+    const key = id + ':' + vid + ':' + (price === null ? '' : price);
+    const cur = merged.get(key) || { id, vid, qty: 0, price };
     cur.qty += qty; merged.set(key, cur);
   }
   const lines = [...merged.values()];
@@ -147,28 +153,37 @@ async function createOrder({ userId, source, customer, payment, items, note }) {
         if (v.stock < l.qty) throw fail(`Only ${v.stock} left of "${p.name} (${v.label})".`);
         l.variant = v;
       } else if (p.stock < l.qty) throw fail(`Only ${p.stock} left of "${p.name}".`);
-      total += Number(p.price) * l.qty;
+      l.unit = l.price === null ? Number(p.price) : l.price;
+      total += l.unit * l.qty;
     }
+    total = Math.round(total * 100) / 100;
+    let disc = 0;
+    if (source === 'pos' && discount !== undefined && discount !== null && discount !== '') {
+      disc = Math.round(Number(discount) * 100) / 100;
+      if (!(disc >= 0)) throw fail('Invalid discount.');
+      if (disc > total) throw fail('The discount cannot be more than the total.');
+    }
+    total = Math.round((total - disc) * 100) / 100;
     const paidNow = source === 'pos' && payment.method !== 'bank_transfer' ? true : payment.status === 'paid';
     const o = await client.query(
-      `INSERT INTO orders (user_id,source,customer_name,phone,address,payment_method,payment_reference,payment_status,status,total,note)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      `INSERT INTO orders (user_id,source,customer_name,phone,address,payment_method,payment_reference,payment_status,status,total,note,discount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
       [
         userId || null, source, customer.name, customer.phone, customer.address,
         payment.method, payment.reference || '', paidNow ? 'paid' : 'unpaid',
-        source === 'pos' ? 'completed' : 'pending', total.toFixed(2), note || '',
+        source === 'pos' ? 'completed' : 'pending', total.toFixed(2), note || '', disc.toFixed(2),
       ]
     );
     const orderId = o.rows[0].id;
     for (const l of lines) {
       const p = prod.get(l.id);
       const label = l.variant ? `${p.name} (${l.variant.label})` : p.name;
-      await client.query('INSERT INTO order_items (order_id,product_id,variant_id,name,price,qty) VALUES ($1,$2,$3,$4,$5,$6)', [orderId, p.id, l.vid || null, label, p.price, l.qty]);
+      await client.query('INSERT INTO order_items (order_id,product_id,variant_id,name,price,list_price,qty) VALUES ($1,$2,$3,$4,$5,$6,$7)', [orderId, p.id, l.vid || null, label, l.unit.toFixed(2), p.price, l.qty]);
       if (l.vid) await client.query('UPDATE product_variants SET stock = stock - $1 WHERE id=$2', [l.qty, l.vid]);
       await client.query('UPDATE products SET stock = stock - $1 WHERE id=$2', [l.qty, p.id]);
     }
     await client.query('COMMIT');
-    return { id: orderId, total };
+    return { id: orderId, total, discount: disc };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
@@ -196,6 +211,7 @@ app.get('/api/config', (req, res) => {
     store: "Willy's Leather Craft & Military Clothing",
     gcash: { number: process.env.GCASH_NUMBER || '', name: process.env.GCASH_NAME || '' },
     bank: process.env.BANK_DETAILS || '',
+    receipt: { address: process.env.RECEIPT_ADDRESS || '', phone: process.env.RECEIPT_PHONE || '', footer: process.env.RECEIPT_FOOTER || 'Thank you for shopping with us!' },
     authUrl: AUTH_URL,
   });
 });
@@ -505,7 +521,7 @@ app.post('/api/admin/pos/sale', auth, adminOnly, wrap(async (req, res) => {
     userId: null, source: 'pos',
     customer: { name: clean(req.body.customer_name, 100) || 'Walk-in', phone: '', address: '' },
     payment: { method, reference: clean(req.body.payment_reference, 100), status: 'paid' },
-    items: req.body.items, note: clean(req.body.note, 300),
+    items: req.body.items, note: clean(req.body.note, 300), discount: req.body.discount,
   });
   res.json({ order });
 }));

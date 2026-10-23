@@ -226,6 +226,19 @@ app.get('/api/orders/mine', auth, wrap(async (req, res) => {
   res.json({ orders: r.rows });
 }));
 
+// Customer attaches a payment screenshot (GCash / Maya / bank transfer) to their own order
+app.post('/api/orders/:id/proof', auth, wrap(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const imageId = await cleanImageId(req.body.image_id);
+  if (!id || !imageId) return bad(res, 'Please attach a picture.');
+  const r = await query(
+    `UPDATE orders SET payment_proof_id=$1
+     WHERE id=$2 AND user_id=$3 AND payment_method IN ('gcash','maya','bank_transfer') AND status<>'cancelled' AND payment_status<>'paid'
+     RETURNING id`, [imageId, id, req.user.id]);
+  if (!r.rows.length) return bad(res, 'You cannot add proof of payment to this order.', 400);
+  res.json({ ok: true });
+}));
+
 // ---------- profile ----------
 app.get('/api/profile', auth, (req, res) => res.json({ user: publicUser(req.user) }));
 

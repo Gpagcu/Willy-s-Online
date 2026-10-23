@@ -28,6 +28,7 @@ async function route() {
       else if (sub === 'products') await viewAdminProducts();
       else if (sub === 'orders') await viewAdminOrders(params);
       else if (sub === 'reports') await viewAdminReports(params);
+      else if (sub === 'receipts') await viewAdminReceipts(params);
       else if (sub === 'pos') await viewAdminPOS();
       else if (sub === 'chat') await viewAdminChat(parts);
       else $app.innerHTML = '<h1>Not found</h1>';

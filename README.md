@@ -62,6 +62,7 @@ To make another admin later, after they have logged in once:
 - **Customers:** sign up, browse/search, add to cart, check out. For GCash/Maya/Bank transfer they send the payment and type the reference number.
 - **Admin > Orders:** mark payment "paid", move orders to confirmed/shipped/completed. Cancelling puts the stock back.
 - **Admin > POS:** walk-in sales. Tap any number of products to build one sale, change the quantity or the price of any line (for haggling), add an extra discount, take cash (change is calculated) or GCash/Maya/bank, then print a standard 80 mm receipt. Stock goes down automatically. To print, pick your receipt printer in the print window and turn off "Headers and footers"; the receipt prints alone, without the product list.
+- **Admin > Receipts:** find any past sale by date, receipt number or customer name (in-store or online). Open it to see the receipt, then **Print**, download a **PDF**, or download a **Picture** (PNG) you can send to the customer on Messenger or Viber. The same three buttons appear right after you complete a sale.
 - **Receipt details:** set `RECEIPT_ADDRESS`, `RECEIPT_PHONE` and `RECEIPT_FOOTER` in `.env` (and in Render's environment variables) to show your address, phone and thank-you line on receipts.
 - **Admin > Chat:** reply to customers.
 
@@ -132,6 +133,7 @@ public/js/           the site's code, one file per topic (see below)
 | `chat.js` | customer chat and the admin chat inbox |
 | `admin.js` | admin menu, dashboard, products and inventory, orders |
 | `admin-reports.js` | admin sales reports |
+| `admin-receipts.js` | receipts page, receipt PDF and picture download |
 | `admin-pos.js` | admin in-store POS and receipt |
 | `main.js` | page router, menu button, start-up (keep last) |
 

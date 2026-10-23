@@ -1638,3 +1638,15 @@ body.modal-open {
     width: 100%;
   }
 }
+
+/* Receipt buttons */
+.rcpt-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.rcpt-actions .btn {
+  flex: 1 1 90px;
+  padding: 12px 10px;
+}

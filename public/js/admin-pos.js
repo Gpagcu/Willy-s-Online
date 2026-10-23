@@ -149,7 +149,7 @@ async function viewAdminPOS() {
       const btn = document.getElementById('done'); btn.disabled = true;
       try {
         const items = sale.map((i) => ({ id: i.id, variant_id: i.vid || null, qty: i.qty, price: i.price }));
-        const r = await api('/admin/pos/sale', { method: 'POST', body: { items, discount: discount(), payment_method: ui.pm, payment_reference: ref.value, customer_name: cn.value } });
+        const r = await api('/admin/pos/sale', { method: 'POST', body: { items, discount: discount(), payment_method: ui.pm, payment_reference: ref.value, customer_name: cn.value, cash_received: ui.pm === 'cash' ? Number(cr.value) || 0 : 0 } });
         const data = {
           id: r.order.id, date: new Date().toLocaleString('en-PH', { dateStyle: 'medium', timeStyle: 'short' }), cashier: state.user && state.user.name,
           customer: cn.value.trim() || 'Walk-in', items: sale.map((i) => ({ name: i.name, qty: i.qty, unit: i.price })),
@@ -157,8 +157,8 @@ async function viewAdminPOS() {
         };
         const html = receiptHtml(data);
         box.innerHTML = `<div class="pos-r-head"><h2>Sale #${r.order.id} complete ✅</h2></div><div class="rc-screen" style="overflow:auto;flex:1">${html}</div>
-          <div class="pos-foot no-print"><button class="btn pos-done" id="prt">Print receipt</button><button class="btn secondary" id="newsale" style="width:100%;margin-top:8px">New sale</button></div>`;
-        document.getElementById('prt').onclick = () => printReceipt(html);
+          <div class="pos-foot no-print"><div class="rcpt-actions">${receiptButtons()}</div><button class="btn pos-done" id="newsale">New sale</button></div>`;
+        bindReceiptButtons(box, data, html);
         document.getElementById('newsale').onclick = viewAdminPOS;
       } catch (err) { document.getElementById('serr').innerHTML = errBox(err.message); btn.disabled = false; }
     };

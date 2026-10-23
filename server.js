@@ -110,7 +110,7 @@ const adminOnly = (req, res, next) =>
   req.user.role === 'admin' ? next() : bad(res, 'Admin access only.', 403);
 
 // Create an order inside a transaction, locking stock rows so you can't oversell
-async function createOrder({ userId, source, customer, payment, items, note, discount }) {
+async function createOrder({ userId, source, customer, payment, items, note, discount, cashReceived, cashier }) {
   const fail = (m) => Object.assign(new Error(m), { status: 400 });
   if (!Array.isArray(items) || !items.length) throw fail('Cart is empty.');
   const merged = new Map(); // "productId:variantId" -> { id, vid, qty }
@@ -166,12 +166,13 @@ async function createOrder({ userId, source, customer, payment, items, note, dis
     total = Math.round((total - disc) * 100) / 100;
     const paidNow = source === 'pos' && payment.method !== 'bank_transfer' ? true : payment.status === 'paid';
     const o = await client.query(
-      `INSERT INTO orders (user_id,source,customer_name,phone,address,payment_method,payment_reference,payment_status,status,total,note,discount)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+      `INSERT INTO orders (user_id,source,customer_name,phone,address,payment_method,payment_reference,payment_status,status,total,note,discount,cash_received,cashier)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
       [
         userId || null, source, customer.name, customer.phone, customer.address,
         payment.method, payment.reference || '', paidNow ? 'paid' : 'unpaid',
         source === 'pos' ? 'completed' : 'pending', total.toFixed(2), note || '', disc.toFixed(2),
+        source === 'pos' && Number(cashReceived) > 0 ? Number(cashReceived).toFixed(2) : null, source === 'pos' ? String(cashier || '').slice(0, 100) : '',
       ]
     );
     const orderId = o.rows[0].id;
@@ -202,7 +203,7 @@ async function adjustOrderStock(client, orderId, sign) {
 
 const VARIANTS_SQL = `(SELECT COALESCE(json_agg(json_build_object('id',v.id,'label',v.label,'stock',v.stock) ORDER BY v.id),'[]'::json) FROM product_variants v WHERE v.product_id=products.id) AS variants`;
 const ORDER_SELECT = `
-  SELECT o.*, COALESCE(json_agg(json_build_object('name',i.name,'price',i.price,'qty',i.qty)) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
+  SELECT o.*, COALESCE(json_agg(json_build_object('name',i.name,'price',i.price,'qty',i.qty) ORDER BY i.id) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
   FROM orders o LEFT JOIN order_items i ON i.order_id=o.id`;
 
 // ---------- config ----------
@@ -522,6 +523,7 @@ app.post('/api/admin/pos/sale', auth, adminOnly, wrap(async (req, res) => {
     customer: { name: clean(req.body.customer_name, 100) || 'Walk-in', phone: '', address: '' },
     payment: { method, reference: clean(req.body.payment_reference, 100), status: 'paid' },
     items: req.body.items, note: clean(req.body.note, 300), discount: req.body.discount,
+    cashReceived: method === 'cash' ? req.body.cash_received : null, cashier: req.user.name,
   });
   res.json({ order });
 }));
@@ -574,6 +576,24 @@ app.get('/api/admin/reports', auth, adminOnly, wrap(async (req, res) => {
     summary: { ...s, average: s.orders ? Number(s.revenue) / s.orders : 0 },
     byDay: byDay.rows, byMethod: byMethod.rows, bySource: bySource.rows, topProducts: top.rows, orders: orders.rows,
   });
+}));
+
+// ---------- admin: receipts (look up, reprint, download) ----------
+app.get('/api/admin/receipts', auth, adminOnly, wrap(async (req, res) => {
+  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && !Number.isNaN(Date.parse(v));
+  const t = await query("SELECT (now() AT TIME ZONE 'Asia/Manila')::date::text AS d, ((now() AT TIME ZONE 'Asia/Manila')::date - 6)::text AS d7");
+  const to = isDate(req.query.to) ? req.query.to : t.rows[0].d;
+  const from = isDate(req.query.from) ? req.query.from : t.rows[0].d7;
+  if (from > to) return bad(res, 'The start date must be before the end date.');
+  if ((Date.parse(to) - Date.parse(from)) / 86400000 > 366) return bad(res, 'Please choose a range of one year or less.');
+  const params = [from, to];
+  const where = ["(o.created_at AT TIME ZONE 'Asia/Manila')::date BETWEEN $1::date AND $2::date"];
+  const source = clean(req.query.source, 10);
+  if (source === 'pos' || source === 'online') { params.push(source); where.push(`o.source=$${params.length}`); }
+  const q = clean(req.query.q, 80);
+  if (q) { params.push(q); params.push('%' + q + '%'); where.push(`(o.id::text = ltrim($${params.length - 1}, '0') OR o.customer_name ILIKE $${params.length})`); }
+  const r = await query(`${ORDER_SELECT} WHERE ${where.join(' AND ')} GROUP BY o.id ORDER BY o.id DESC LIMIT 300`, params);
+  res.json({ from, to, orders: r.rows });
 }));
 
 // ---------- admin: chat ----------

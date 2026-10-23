@@ -1,7 +1,7 @@
 /* Willy's store - Admin: navigation, dashboard, products and inventory, orders */
 // ---------- views: admin ----------
 function adminNav(active) {
-  const t = [['', 'Dashboard'], ['/products', 'Products'], ['/orders', 'Orders'], ['/reports', 'Reports'], ['/pos', 'POS (in-store)'], ['/chat', 'Chat']];
+  const t = [['', 'Dashboard'], ['/products', 'Products'], ['/orders', 'Orders'], ['/reports', 'Reports'], ['/receipts', 'Receipts'], ['/pos', 'POS (in-store)'], ['/chat', 'Chat']];
   return `<div class="subnav">${t.map(([p, l]) => `<a href="#/admin${p}" class="${active === p ? 'active' : ''}">${l}${p === '/chat' && unread ? `<span class="badge">${unread}</span>` : ''}</a>`).join('')}</div>`;
 }
 function guardAdmin() {

@@ -2,6 +2,7 @@
 // ---------- router ----------
 async function route() {
   clearTimers();
+  $app.classList.remove('pos-wide');
   renderNav();
   const raw = (location.hash || '#/').slice(1);
   const [pathStr, qs] = raw.split('?');

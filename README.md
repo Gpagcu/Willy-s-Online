@@ -84,7 +84,7 @@ To make another admin later, after they have logged in once:
 
 | What you see | What it means |
 |---|---|
-| Red box: "could not load your account (no-token)" | The browser has no login token. You are probably not logged in (wrong password gives a 401 in the F12 console) or `public/app.js` is an old copy. Hard-refresh with Ctrl+Shift+R. |
+| Red box: "could not load your account (no-token)" | The browser has no login token. You are probably not logged in (wrong password gives a 401 in the F12 console) or the files in `public/js/` are old copies. Hard-refresh with Ctrl+Shift+R. |
 | "... (ERR_JWT_CLAIM_VALIDATION_FAILED)" or "Auth token rejected" in the terminal | Token issuer mismatch: check `NEON_AUTH_URL` is exactly the Auth URL from the console. |
 | Verification code never arrives | Neon's shared sender is limited. Set up the Custom SMTP provider (step A4). Check spam too. |
 | Code rejected / "Invalid OTP" | Use only the newest code; each resend invalidates older ones. |
@@ -97,7 +97,7 @@ To make another admin later, after they have logged in once:
 
 - GCash, Maya and bank payments are verified by you against the reference number. Automatic payments need a gateway such as PayMongo.
 - Neon's `@neondatabase/auth` package is currently in beta.
-- There is no "forgot password" screen yet.
+- Forgot password (emailed code) and Change password (in My profile) are built in. They use the same email sender as sign-up codes.
 - If you collect customer data in the Philippines, show a short privacy notice (Data Privacy Act). Check with a lawyer.
 
 ## Files
@@ -107,6 +107,25 @@ server.js            API routes, Neon token check, order/stock logic
 db.js                database connection, auto-setup, sample products
 schema.sql           table definitions
 auth-client-src.js   source for the Neon Auth browser bundle
-public/              the website (index.html, app.js, styles.css, logo.png, neon-auth.js)
+public/              the website (index.html, styles.css, logo.png, neon-auth.js)
+public/js/           the site's code, one file per topic (see below)
 .env.example         settings template
-```#
+```
+
+### Where to edit (public/js/, loaded in this order)
+
+| File | What is inside |
+|---|---|
+| `core.js` | shared helpers, app state, toast messages, cart helpers |
+| `api.js` | login token, talking to the server, photo upload |
+| `nav.js` | top menu, unread chat badge |
+| `shop.js` | home page, shop and search, cart, checkout |
+| `auth.js` | sign up, log in, verify email, forgot password |
+| `account.js` | My profile, My orders (payment proof button) |
+| `chat.js` | customer chat and the admin chat inbox |
+| `admin.js` | admin menu, dashboard, products and inventory, orders |
+| `admin-reports.js` | admin sales reports |
+| `admin-pos.js` | admin in-store POS and receipt |
+| `main.js` | page router, menu button, start-up (keep last) |
+
+New code files must be added to `public/index.html` as a `<script>` line before `main.js`.

@@ -21,6 +21,30 @@ const REQUIRE_VERIFIED = String(process.env.REQUIRE_VERIFIED_EMAIL ?? 'true').tr
 if (!REQUIRE_VERIFIED) console.warn('WARNING: email verification is NOT required (REQUIRE_VERIFIED_EMAIL=false). Testing only!');
 
 app.set('trust proxy', 1);
+// Neon Auth through our own address. iPhone Safari (and others) block the login cookie when it
+// comes from another website (neon.tech), so the browser talks to /neon-auth on THIS site and we pass it on.
+app.use('/neon-auth', express.raw({ type: () => true, limit: '200kb' }), async (req, res) => {
+  try {
+    const headers = {};
+    for (const h of ['cookie', 'content-type', 'authorization', 'user-agent', 'accept', 'accept-language']) if (req.headers[h]) headers[h] = req.headers[h];
+    headers.origin = req.headers.origin || (req.protocol + '://' + req.get('host'));
+    const hasBody = !['GET', 'HEAD'].includes(req.method) && Buffer.isBuffer(req.body) && req.body.length;
+    const r = await fetch(AUTH_URL + req.url, { method: req.method, headers, body: hasBody ? req.body : undefined, redirect: 'manual' });
+    res.status(r.status);
+    r.headers.forEach((v, k) => {
+      if (['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'set-cookie', 'access-control-allow-origin', 'access-control-allow-credentials'].includes(k)) return;
+      res.setHeader(k, v);
+    });
+    // Make the cookies belong to this site
+    const cookies = (r.headers.getSetCookie ? r.headers.getSetCookie() : []).map((c) =>
+      c.replace(/;\s*Domain=[^;]*/i, '').replace(/;\s*SameSite=[^;]*/i, '') + '; SameSite=Lax');
+    if (cookies.length) res.setHeader('Set-Cookie', cookies);
+    res.send(Buffer.from(await r.arrayBuffer()));
+  } catch (e) {
+    console.error('Neon Auth proxy failed:', e.message);
+    res.status(502).json({ message: 'Sign-in service is not reachable.' });
+  }
+});
 app.use(express.json({ limit: '200kb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');

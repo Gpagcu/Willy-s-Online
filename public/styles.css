@@ -964,3 +964,19 @@ th {
 [hidden] {
   display: none !important;
 }
+
+/* Footer sits at the bottom of the screen on short pages */
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+body > main {
+  flex: 1 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+body > .footer {
+  flex-shrink: 0;
+}

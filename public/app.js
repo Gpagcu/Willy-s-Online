@@ -772,7 +772,7 @@
   (async function boot() {
     loadCart();
     try { state.config = await api('/config'); } catch {}
-    if (state.config.authUrl && window.createNeonAuth) { try { state.auth = window.createNeonAuth(state.config.authUrl); } catch (e) { console.error('Neon Auth client failed to start', e); } }
+    if (state.config.authUrl && window.createNeonAuth) { try { state.auth = window.createNeonAuth(location.origin + '/neon-auth'); } catch (e) { console.error('Neon Auth client failed to start', e); } }
     try { state.user = (await api('/auth/me')).user; } catch {}
     pollUnread(); setInterval(pollUnread, 20000);
     route();

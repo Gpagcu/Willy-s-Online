@@ -50,9 +50,7 @@ async function viewHome() {
     const box = document.getElementById('featured');
     if (!box) return;
     box.innerHTML = `<h2>Featured gear</h2><p class="sub">A few things from our shelves.</p><div class="grid">${picks.map(productCard).join('')}</div><p style="margin-top:14px"><a href="#/shop">See everything &rarr;</a></p>`;
-    box.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => {
-      const p = picks.find((x) => x.id === Number(b.dataset.add)); if (p) addToCart(p);
-    });
+    bindAddButtons(box, picks);
   } catch {}
 }
 
@@ -74,13 +72,26 @@ async function viewShop(params) {
     const p = new URLSearchParams(); if (q) p.set('q', q); if (b.dataset.cat) p.set('cat', b.dataset.cat);
     location.hash = '#/shop' + (p.toString() ? '?' + p : '');
   });
-  $app.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => {
-    const p = pr.products.find((x) => x.id === Number(b.dataset.add)); if (p) addToCart(p);
+  bindAddButtons($app, pr.products);
+}
+
+// "Add to cart" buttons. If the product has sizes/colors, use the one picked in the card.
+function bindAddButtons(root, list) {
+  root.querySelectorAll('[data-add]').forEach((b) => b.onclick = () => {
+    const p = list.find((x) => x.id === Number(b.dataset.add)); if (!p) return;
+    if (p.variants && p.variants.length) {
+      const sel = b.closest('.product').querySelector('select[data-opt]');
+      const v = p.variants.find((x) => x.id === Number(sel && sel.value));
+      if (!v) return toast('Please choose an option first.');
+      return addToCart(p, 1, v);
+    }
+    addToCart(p);
   });
 }
 
 function productCard(p) {
   const stock = p.stock <= 0 ? '<span class="chip bad">Out of stock</span>' : p.stock <= 5 ? `<span class="chip warn">Only ${p.stock} left</span>` : '<span class="chip ok">In stock</span>';
+  const vs = p.variants || [];
   const img = p.image_url ? `<img src="${esc(p.image_url)}" alt="${esc(p.name)}" loading="lazy">` : '🧰';
   return `<div class="card product">
     <div class="img">${img}</div>
@@ -88,6 +99,7 @@ function productCard(p) {
     <h3>${esc(p.name)}</h3>
     <div class="muted" style="font-size:13px">${esc(p.description)}</div>
     <div class="row" style="justify-content:space-between"><span class="price">${peso(p.price)}</span>${stock}</div>
+    ${vs.length ? `<select data-opt="${p.id}" aria-label="Choose option"><option value="">Choose option…</option>${vs.map((v) => `<option value="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}>${esc(v.label)}${v.stock <= 0 ? ' (sold out)' : ''}</option>`).join('')}</select>` : ''}
     <button class="btn" data-add="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}>Add to cart</button>
   </div>`;
 }
@@ -97,16 +109,16 @@ function viewCart() {
   if (!state.cart.length) { $app.innerHTML = '<h1>Your cart</h1><p class="muted">Your cart is empty. <a href="#/shop">Start shopping</a>.</p>'; return; }
   $app.innerHTML = `<h1>Your cart</h1>
     <div class="table-wrap"><table><thead><tr><th>Item</th><th>Price</th><th>Qty</th><th class="right">Subtotal</th><th></th></tr></thead><tbody>
-    ${state.cart.map((i) => `<tr><td>${esc(i.name)}</td><td>${peso(i.price)}</td>
-      <td><span class="qty"><button data-dec="${i.id}" aria-label="Decrease">−</button>${i.qty}<button data-inc="${i.id}" aria-label="Increase">+</button></span></td>
-      <td class="right">${peso(i.price * i.qty)}</td><td><button class="btn small danger" data-rm="${i.id}">Remove</button></td></tr>`).join('')}
+    ${state.cart.map((i, n) => `<tr><td>${esc(cartName(i))}</td><td>${peso(i.price)}</td>
+      <td><span class="qty"><button data-dec="${n}" aria-label="Decrease">−</button>${i.qty}<button data-inc="${n}" aria-label="Increase">+</button></span></td>
+      <td class="right">${peso(i.price * i.qty)}</td><td><button class="btn small danger" data-rm="${n}">Remove</button></td></tr>`).join('')}
     </tbody></table></div>
     <p class="right total">Total: ${peso(cartTotal())}</p>
     <p class="right"><a class="btn secondary" href="#/shop">Keep shopping</a> <a class="btn" href="#/checkout">Checkout</a></p>`;
-  const find = (id) => state.cart.find((i) => i.id === Number(id));
+  const find = (n) => state.cart[Number(n)];
   $app.querySelectorAll('[data-inc]').forEach((b) => b.onclick = () => { const i = find(b.dataset.inc); if (i.qty < i.stock) i.qty++; else toast(`Only ${i.stock} in stock.`); saveCart(); viewCart(); });
   $app.querySelectorAll('[data-dec]').forEach((b) => b.onclick = () => { const i = find(b.dataset.dec); i.qty--; if (i.qty < 1) state.cart = state.cart.filter((x) => x !== i); saveCart(); viewCart(); });
-  $app.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { state.cart = state.cart.filter((x) => x.id !== Number(b.dataset.rm)); saveCart(); viewCart(); });
+  $app.querySelectorAll('[data-rm]').forEach((b) => b.onclick = () => { state.cart = state.cart.filter((x, n) => n !== Number(b.dataset.rm)); saveCart(); viewCart(); });
 }
 
 function viewCheckout() {
@@ -134,7 +146,7 @@ function viewCheckout() {
         <button class="btn" type="submit">Place order</button>
       </form>
       <div class="card"><h2 style="margin-top:0">Order summary</h2>
-        ${state.cart.map((i) => `<div class="row" style="justify-content:space-between"><span>${i.qty} × ${esc(i.name)}</span><span>${peso(i.qty * i.price)}</span></div>`).join('')}
+        ${state.cart.map((i) => `<div class="row" style="justify-content:space-between"><span>${i.qty} × ${esc(cartName(i))}</span><span>${peso(i.qty * i.price)}</span></div>`).join('')}
         <hr><div class="row" style="justify-content:space-between"><b>Total</b><span class="total">${peso(cartTotal())}</span></div>
       </div>
     </div>`;
@@ -156,7 +168,7 @@ function viewCheckout() {
     const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
     const fd = Object.fromEntries(new FormData(form));
     try {
-      const r = await api('/orders', { method: 'POST', body: { ...fd, items: state.cart.map((i) => ({ id: i.id, qty: i.qty })) } });
+      const r = await api('/orders', { method: 'POST', body: { ...fd, items: state.cart.map((i) => ({ id: i.id, variant_id: i.variant_id || null, qty: i.qty })) } });
       state.cart = []; saveCart();
       $app.innerHTML = `<h1>Thank you! 🎉</h1><div class="card"><p>Your order <b>#${r.order.id}</b> was placed. Total: <b>${peso(r.order.total)}</b>.</p><p class="muted">Track it in <a href="#/orders">My orders</a>, or message us in <a href="#/chat">Chat</a>.</p></div>`;
     } catch (err) {

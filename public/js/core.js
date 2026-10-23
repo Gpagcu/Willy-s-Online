@@ -23,12 +23,16 @@ const saveCart = () => { try { localStorage.setItem('wlc_cart', JSON.stringify(s
 const cartCount = () => state.cart.reduce((n, i) => n + i.qty, 0);
 const cartTotal = () => state.cart.reduce((n, i) => n + i.qty * i.price, 0);
 
-function addToCart(p, qty = 1) {
-  const ex = state.cart.find((i) => i.id === p.id);
+// v = the chosen size/color ({ id, label, stock }) for products that have options
+const cartName = (i) => i.name + (i.variant_label ? ' (' + i.variant_label + ')' : '');
+function addToCart(p, qty = 1, v = null) {
+  const vid = v ? v.id : 0;
+  const stock = v ? v.stock : p.stock;
+  const ex = state.cart.find((i) => i.id === p.id && (i.variant_id || 0) === vid);
   const have = ex ? ex.qty : 0;
-  if (have + qty > p.stock) return toast(`Only ${p.stock} in stock.`);
-  if (ex) { ex.qty += qty; ex.stock = p.stock; ex.price = Number(p.price); }
-  else state.cart.push({ id: p.id, name: p.name, price: Number(p.price), qty, stock: p.stock });
+  if (have + qty > stock) return toast(`Only ${stock} in stock.`);
+  if (ex) { ex.qty += qty; ex.stock = stock; ex.price = Number(p.price); }
+  else state.cart.push({ id: p.id, variant_id: vid || null, variant_label: v ? v.label : '', name: p.name, price: Number(p.price), qty, stock });
   saveCart(); toast('Added to cart');
 }
 

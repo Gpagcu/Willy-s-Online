@@ -76,3 +76,13 @@ CREATE TABLE IF NOT EXISTS images (
 );
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_id TEXT;
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_proof_id TEXT;
+
+-- Sizes / colors for a product. Product stock = total of its options.
+CREATE TABLE IF NOT EXISTS product_variants (
+  id SERIAL PRIMARY KEY,
+  product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  stock INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+  UNIQUE (product_id, label)
+);
+ALTER TABLE order_items ADD COLUMN IF NOT EXISTS variant_id INTEGER REFERENCES product_variants(id) ON DELETE SET NULL;

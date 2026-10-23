@@ -12,12 +12,16 @@ async function viewAdminPOS() {
   function drawList() {
     const q = document.getElementById('ps').value.toLowerCase();
     const rows = all.filter((p) => !q || [p.name, p.sku, p.category].some((x) => (x || '').toLowerCase().includes(q)));
-    list.innerHTML = rows.map((p) => `<button class="pos-item" data-id="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}><span>${esc(p.name)}<br><small class="muted">${esc(p.sku || '')} · ${p.stock} in stock</small></span><b>${peso(p.price)}</b></button>`).join('') || '<p class="muted">No matches.</p>';
+    list.innerHTML = rows.map((p) => (p.variants && p.variants.length)
+      ? `<div class="pos-group"><div style="padding:6px 2px"><b>${esc(p.name)}</b> <span class="muted">· ${peso(p.price)}</span></div>${p.variants.map((v) => `<button class="pos-item" data-id="${p.id}" data-v="${v.id}" ${v.stock <= 0 ? 'disabled' : ''}><span>${esc(v.label)}<br><small class="muted">${v.stock} in stock</small></span><b>${peso(p.price)}</b></button>`).join('')}</div>`
+      : `<button class="pos-item" data-id="${p.id}" ${p.stock <= 0 ? 'disabled' : ''}><span>${esc(p.name)}<br><small class="muted">${esc(p.sku || '')} · ${p.stock} in stock</small></span><b>${peso(p.price)}</b></button>`).join('') || '<p class="muted">No matches.</p>';
     list.querySelectorAll('[data-id]').forEach((b) => b.onclick = () => {
       const p = all.find((x) => x.id === Number(b.dataset.id));
-      const ex = sale.find((i) => i.id === p.id);
-      if ((ex ? ex.qty : 0) + 1 > p.stock) return toast(`Only ${p.stock} in stock.`);
-      if (ex) ex.qty++; else sale.push({ id: p.id, name: p.name, price: Number(p.price), qty: 1, stock: p.stock });
+      const v = b.dataset.v ? p.variants.find((x) => x.id === Number(b.dataset.v)) : null;
+      const stock = v ? v.stock : p.stock;
+      const ex = sale.find((i) => i.id === p.id && (i.vid || 0) === (v ? v.id : 0));
+      if ((ex ? ex.qty : 0) + 1 > stock) return toast(`Only ${stock} in stock.`);
+      if (ex) ex.qty++; else sale.push({ id: p.id, vid: v ? v.id : 0, name: v ? `${p.name} (${v.label})` : p.name, price: Number(p.price), qty: 1, stock });
       drawSale();
     });
   }
@@ -25,15 +29,15 @@ async function viewAdminPOS() {
     const total = sale.reduce((n, i) => n + i.qty * i.price, 0);
     const box = document.getElementById('receipt');
     box.innerHTML = `<h2 style="margin-top:0">Current sale</h2>
-      ${sale.length ? `<table><tbody>${sale.map((i) => `<tr><td>${esc(i.name)}</td><td><span class="qty"><button data-d="${i.id}">−</button>${i.qty}<button data-u="${i.id}">+</button></span></td><td class="right">${peso(i.qty * i.price)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Tap a product to add it.</p>'}
+      ${sale.length ? `<table><tbody>${sale.map((i, n) => `<tr><td>${esc(i.name)}</td><td><span class="qty"><button data-d="${n}">−</button>${i.qty}<button data-u="${n}">+</button></span></td><td class="right">${peso(i.qty * i.price)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">Tap a product to add it.</p>'}
       <p class="right total">${peso(total)}</p>
       <label>Customer (optional)<input id="cn" placeholder="Walk-in"></label>
       <label>Payment<select id="pm"><option value="cash">Cash</option><option value="gcash">GCash</option><option value="maya">Maya</option><option value="bank_transfer">Bank transfer</option></select></label>
       <label id="cash-wrap">Cash received<input id="cr" type="number" min="0" step="0.01"></label>
       <p id="chg" class="muted"></p><div id="serr"></div>
       <div class="row"><button class="btn" id="done" ${sale.length ? '' : 'disabled'}>Complete sale</button><button class="btn secondary" id="clr">Clear</button></div>`;
-    box.querySelectorAll('[data-u]').forEach((b) => b.onclick = () => { const i = sale.find((x) => x.id === Number(b.dataset.u)); if (i.qty < i.stock) i.qty++; else toast('No more stock.'); drawSale(); });
-    box.querySelectorAll('[data-d]').forEach((b) => b.onclick = () => { const i = sale.find((x) => x.id === Number(b.dataset.d)); i.qty--; if (i.qty < 1) sale.splice(sale.indexOf(i), 1); drawSale(); });
+    box.querySelectorAll('[data-u]').forEach((b) => b.onclick = () => { const i = sale[Number(b.dataset.u)]; if (i.qty < i.stock) i.qty++; else toast('No more stock.'); drawSale(); });
+    box.querySelectorAll('[data-d]').forEach((b) => b.onclick = () => { const i = sale[Number(b.dataset.d)]; i.qty--; if (i.qty < 1) sale.splice(sale.indexOf(i), 1); drawSale(); });
     document.getElementById('clr').onclick = () => { sale.length = 0; drawSale(); };
     const pm = document.getElementById('pm'), cr = document.getElementById('cr');
     const upd = () => { document.getElementById('cash-wrap').style.display = pm.value === 'cash' ? 'grid' : 'none'; const c = Number(cr.value) - total; document.getElementById('chg').textContent = pm.value === 'cash' && cr.value ? (c >= 0 ? `Change: ${peso(c)}` : `Short by ${peso(-c)}`) : ''; };
@@ -41,7 +45,7 @@ async function viewAdminPOS() {
     document.getElementById('done').onclick = async () => {
       if (pm.value === 'cash' && cr.value && Number(cr.value) < total) return (document.getElementById('serr').innerHTML = errBox('Cash received is less than the total.'));
       try {
-        const r = await api('/admin/pos/sale', { method: 'POST', body: { items: sale.map((i) => ({ id: i.id, qty: i.qty })), payment_method: pm.value, customer_name: document.getElementById('cn').value } });
+        const r = await api('/admin/pos/sale', { method: 'POST', body: { items: sale.map((i) => ({ id: i.id, variant_id: i.vid || null, qty: i.qty })), payment_method: pm.value, customer_name: document.getElementById('cn').value } });
         const lines = sale.map((i) => `${i.qty} × ${esc(i.name)} — ${peso(i.qty * i.price)}`).join('<br>');
         const change = pm.value === 'cash' && cr.value ? `<br>Cash: ${peso(cr.value)}<br>Change: ${peso(Number(cr.value) - total)}` : '';
         box.innerHTML = `<h2 style="margin-top:0">Sale #${r.order.id} complete ✅</h2><div class="pay-box">Willy's Leather Craft & Military Clothing\n${new Date().toLocaleString('en-PH')}</div><p>${lines}</p><p class="total">${peso(r.order.total)}</p><p>Paid via ${PAY_LABEL[pm.value]}${change}</p>

@@ -34,7 +34,7 @@ async function viewAdminProducts() {
     <div id="editor"></div>
     <div class="table-wrap"><table><thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Price</th><th>Stock</th><th>Status</th><th></th></tr></thead><tbody>
     ${r.products.map((p) => `<tr><td>${esc(p.name)}</td><td>${esc(p.sku || '')}</td><td>${esc(p.category)}</td><td>${peso(p.price)}</td>
-      <td><span class="chip ${p.stock <= 0 ? 'bad' : p.stock <= p.low_stock_alert ? 'warn' : 'ok'}">${p.stock}</span></td>
+      <td><span class="chip ${p.stock <= 0 ? 'bad' : p.stock <= p.low_stock_alert ? 'warn' : 'ok'}">${p.stock}</span>${(p.variants || []).length ? `<br><small class="muted">${p.variants.map((v) => esc(v.label) + ': ' + v.stock).join(', ')}</small>` : ''}</td>
       <td>${p.active ? 'Visible' : '<span class="muted">Hidden</span>'}</td>
       <td><button class="btn small secondary" data-edit="${p.id}">Edit</button></td></tr>`).join('')}
     </tbody></table></div>`;
@@ -45,7 +45,13 @@ async function viewAdminProducts() {
       <label>Name<input name="name" value="${esc(p.name)}" required></label>
       <div class="two"><label>SKU<input name="sku" value="${esc(p.sku || '')}"></label><label>Category<input name="category" value="${esc(p.category)}" list="cats"></label></div>
       <label>Description<textarea name="description">${esc(p.description)}</textarea></label>
-      <div class="two"><label>Price (₱)<input name="price" type="number" min="0" step="0.01" value="${esc(p.price)}" required></label><label>Stock<input name="stock" type="number" min="0" step="1" value="${esc(p.stock)}" required></label></div>
+      <div class="two"><label>Price (₱)<input name="price" type="number" min="0" step="0.01" value="${esc(p.price)}" required></label><label>Stock<input name="stock" id="stock-in" type="number" min="0" step="1" value="${esc(p.stock)}" required></label></div>
+    <div class="card stack" style="background:#fffdf8">
+      <b>Sizes / colors (optional)</b>
+      <span class="muted" style="font-size:13px">Add one row per option, for example "Medium" or "Woodland - L", each with its own stock. When options exist, the Stock box above becomes the total of the options.</span>
+      <div id="opts"></div>
+      <div><button type="button" class="btn secondary small" id="opt-add">+ Add option</button></div>
+    </div>
       <div class="two"><label>Low-stock alert at<input name="low_stock_alert" type="number" min="0" value="${esc(p.low_stock_alert)}"></label><label>Photo<input name="image_url" id="img-url" value="${esc(p.image_url || '')}" placeholder="Upload below, or paste a direct image link (https://…)"></label></div>
       <div class="row"><button type="button" class="btn secondary small" id="img-pick">&#128247; Upload a photo</button><input type="file" id="img-file" accept="image/*" hidden><span id="img-note" class="muted" style="font-size:13px"></span><img id="img-prev" alt="" style="height:56px;border-radius:6px;${p.image_url ? '' : 'display:none'}" src="${esc(p.image_url || '')}"></div>
       <label class="row" style="flex-direction:row;align-items:center"><input type="checkbox" name="active" style="width:auto" ${p.active ? 'checked' : ''}> Visible in the shop</label>
@@ -64,12 +70,25 @@ async function viewAdminProducts() {
       try { const up = await uploadPhoto(f); imgUrl.value = up.url; syncPrev(); imgNote.textContent = 'Uploaded.'; }
       catch (err) { imgNote.textContent = ''; document.getElementById('pe-err').innerHTML = errBox(err.message); }
     };
+    const opts = (p.variants || []).map((v) => ({ id: v.id, label: v.label, stock: v.stock }));
+    const optBox = document.getElementById('opts'), stockIn = document.getElementById('stock-in');
+    const drawOpts = () => {
+      optBox.innerHTML = opts.map((o, n) => `<div class="row" style="gap:8px;margin-bottom:6px"><input data-ol="${n}" value="${esc(o.label)}" placeholder="Option name" maxlength="60" style="flex:2"><input data-os="${n}" type="number" min="0" step="1" value="${o.stock}" aria-label="Stock" style="flex:1;max-width:110px"><button type="button" class="btn small danger" data-ox="${n}" aria-label="Remove option">✕</button></div>`).join('');
+      optBox.querySelectorAll('[data-ol]').forEach((i) => i.oninput = () => { opts[Number(i.dataset.ol)].label = i.value; });
+      optBox.querySelectorAll('[data-os]').forEach((i) => i.oninput = () => { opts[Number(i.dataset.os)].stock = i.value; sumStock(); });
+      optBox.querySelectorAll('[data-ox]').forEach((b) => b.onclick = () => { opts.splice(Number(b.dataset.ox), 1); drawOpts(); });
+      sumStock();
+    };
+    const sumStock = () => { if (opts.length) { stockIn.value = opts.reduce((n, o) => n + (parseInt(o.stock, 10) || 0), 0); stockIn.readOnly = true; } else stockIn.readOnly = false; };
+    document.getElementById('opt-add').onclick = () => { opts.push({ id: null, label: '', stock: 0 }); drawOpts(); };
+    drawOpts();
     document.getElementById('cancel').onclick = () => (document.getElementById('editor').innerHTML = '');
     const hide = document.getElementById('hide');
     if (hide) hide.onclick = async () => { if (confirm('Hide this product from the shop? (Order history is kept.)')) { await api('/admin/products/' + p.id, { method: 'DELETE' }); toast('Product hidden'); viewAdminProducts(); } };
     document.getElementById('pe').onsubmit = async (e) => {
       e.preventDefault();
       const fd = Object.fromEntries(new FormData(e.target)); fd.active = e.target.active.checked;
+    fd.variants = opts.map((o) => ({ id: o.id, label: o.label, stock: o.stock }));
       try { await api(p.id ? '/admin/products/' + p.id : '/admin/products', { method: p.id ? 'PUT' : 'POST', body: fd }); toast('Saved'); viewAdminProducts(); }
       catch (err) { document.getElementById('pe-err').innerHTML = errBox(err.message); }
     };

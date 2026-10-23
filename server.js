@@ -111,29 +111,43 @@ const adminOnly = (req, res, next) =>
 
 // Create an order inside a transaction, locking stock rows so you can't oversell
 async function createOrder({ userId, source, customer, payment, items, note }) {
-  if (!Array.isArray(items) || !items.length) throw Object.assign(new Error('Cart is empty.'), { status: 400 });
-  const merged = new Map();
+  const fail = (m) => Object.assign(new Error(m), { status: 400 });
+  if (!Array.isArray(items) || !items.length) throw fail('Cart is empty.');
+  const merged = new Map(); // "productId:variantId" -> { id, vid, qty }
   for (const it of items) {
     const id = parseInt(it.id, 10);
+    const vid = parseInt(it.variant_id, 10) || 0;
     const qty = parseInt(it.qty, 10);
-    if (!id || !qty || qty < 1 || qty > 999) throw Object.assign(new Error('Invalid item in cart.'), { status: 400 });
-    merged.set(id, (merged.get(id) || 0) + qty);
+    if (!id || !qty || qty < 1 || qty > 999) throw fail('Invalid item in cart.');
+    const key = id + ':' + vid;
+    const cur = merged.get(key) || { id, vid, qty: 0 };
+    cur.qty += qty; merged.set(key, cur);
   }
+  const lines = [...merged.values()];
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const ids = [...merged.keys()];
-    const pr = await client.query(
-      'SELECT id,name,price,stock,active FROM products WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE',
-      [ids]
-    );
-    if (pr.rows.length !== ids.length) throw Object.assign(new Error('A product in your cart no longer exists.'), { status: 400 });
+    const ids = [...new Set(lines.map((l) => l.id))].sort((x, y) => x - y);
+    const pr = await client.query('SELECT id,name,price,stock,active FROM products WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE', [ids]);
+    if (pr.rows.length !== ids.length) throw fail('A product in your cart no longer exists.');
+    const prod = new Map(pr.rows.map((p) => [p.id, p]));
+    const vids = lines.map((l) => l.vid).filter(Boolean).sort((x, y) => x - y);
+    const vr = vids.length ? await client.query('SELECT id,product_id,label,stock FROM product_variants WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE', [vids]) : { rows: [] };
+    const vari = new Map(vr.rows.map((v) => [v.id, v]));
+    const hv = await client.query('SELECT DISTINCT product_id FROM product_variants WHERE product_id = ANY($1::int[])', [ids]);
+    const hasVariants = new Set(hv.rows.map((r) => r.product_id));
     let total = 0;
-    for (const p of pr.rows) {
-      const qty = merged.get(p.id);
-      if (!p.active) throw Object.assign(new Error(`"${p.name}" is no longer available.`), { status: 400 });
-      if (p.stock < qty) throw Object.assign(new Error(`Only ${p.stock} left of "${p.name}".`), { status: 400 });
-      total += Number(p.price) * qty;
+    for (const l of lines) {
+      const p = prod.get(l.id);
+      if (!p.active) throw fail(`"${p.name}" is no longer available.`);
+      if (hasVariants.has(p.id) && !l.vid) throw fail(`Please choose an option for "${p.name}".`);
+      if (l.vid) {
+        const v = vari.get(l.vid);
+        if (!v || v.product_id !== p.id) throw fail(`That option of "${p.name}" is no longer available.`);
+        if (v.stock < l.qty) throw fail(`Only ${v.stock} left of "${p.name} (${v.label})".`);
+        l.variant = v;
+      } else if (p.stock < l.qty) throw fail(`Only ${p.stock} left of "${p.name}".`);
+      total += Number(p.price) * l.qty;
     }
     const paidNow = source === 'pos' && payment.method !== 'bank_transfer' ? true : payment.status === 'paid';
     const o = await client.query(
@@ -146,10 +160,12 @@ async function createOrder({ userId, source, customer, payment, items, note }) {
       ]
     );
     const orderId = o.rows[0].id;
-    for (const p of pr.rows) {
-      const qty = merged.get(p.id);
-      await client.query('INSERT INTO order_items (order_id,product_id,name,price,qty) VALUES ($1,$2,$3,$4,$5)', [orderId, p.id, p.name, p.price, qty]);
-      await client.query('UPDATE products SET stock = stock - $1 WHERE id=$2', [qty, p.id]);
+    for (const l of lines) {
+      const p = prod.get(l.id);
+      const label = l.variant ? `${p.name} (${l.variant.label})` : p.name;
+      await client.query('INSERT INTO order_items (order_id,product_id,variant_id,name,price,qty) VALUES ($1,$2,$3,$4,$5,$6)', [orderId, p.id, l.vid || null, label, p.price, l.qty]);
+      if (l.vid) await client.query('UPDATE product_variants SET stock = stock - $1 WHERE id=$2', [l.qty, l.vid]);
+      await client.query('UPDATE products SET stock = stock - $1 WHERE id=$2', [l.qty, p.id]);
     }
     await client.query('COMMIT');
     return { id: orderId, total };
@@ -161,6 +177,15 @@ async function createOrder({ userId, source, customer, payment, items, note }) {
   }
 }
 
+// Put an order's stock back (sign=+1, cancelled) or take it again (sign=-1, reopened). Handles sizes/colors too.
+async function adjustOrderStock(client, orderId, sign) {
+  const op = sign > 0 ? '+' : '-';
+  await client.query(`UPDATE product_variants v SET stock = v.stock ${op} s.q FROM (SELECT variant_id, SUM(qty)::int q FROM order_items WHERE order_id=$1 AND variant_id IS NOT NULL GROUP BY variant_id) s WHERE v.id=s.variant_id`, [orderId]);
+  await client.query(`UPDATE products p SET stock = p.stock ${op} s.q FROM (SELECT product_id, SUM(qty)::int q FROM order_items WHERE order_id=$1 AND variant_id IS NULL GROUP BY product_id) s WHERE p.id=s.product_id AND NOT EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id=p.id)`, [orderId]);
+  await client.query(`UPDATE products p SET stock = (SELECT COALESCE(SUM(v.stock),0) FROM product_variants v WHERE v.product_id=p.id) WHERE p.id IN (SELECT product_id FROM order_items WHERE order_id=$1) AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id=p.id)`, [orderId]);
+}
+
+const VARIANTS_SQL = `(SELECT COALESCE(json_agg(json_build_object('id',v.id,'label',v.label,'stock',v.stock) ORDER BY v.id),'[]'::json) FROM product_variants v WHERE v.product_id=products.id) AS variants`;
 const ORDER_SELECT = `
   SELECT o.*, COALESCE(json_agg(json_build_object('name',i.name,'price',i.price,'qty',i.qty)) FILTER (WHERE i.id IS NOT NULL), '[]') AS items
   FROM orders o LEFT JOIN order_items i ON i.order_id=o.id`;
@@ -191,7 +216,7 @@ app.get('/api/products', wrap(async (req, res) => {
   const where = ['active = TRUE'];
   if (q) { params.push(`%${q}%`); where.push(`(name ILIKE $${params.length} OR description ILIKE $${params.length} OR sku ILIKE $${params.length})`); }
   if (category) { params.push(category); where.push(`category = $${params.length}`); }
-  const r = await query(`SELECT id,name,sku,category,description,price,stock,image_url FROM products WHERE ${where.join(' AND ')} ORDER BY category, name`, params);
+  const r = await query(`SELECT id,name,sku,category,description,price,stock,image_url, ${VARIANTS_SQL} FROM products WHERE ${where.join(' AND ')} ORDER BY category, name`, params);
   res.json({ products: r.rows });
 }));
 
@@ -333,34 +358,97 @@ function checkProduct(p) {
 }
 
 app.get('/api/admin/products', auth, adminOnly, wrap(async (req, res) => {
-  const r = await query('SELECT * FROM products ORDER BY category, name');
+  const r = await query(`SELECT *, ${VARIANTS_SQL} FROM products ORDER BY category, name`);
   res.json({ products: r.rows });
 }));
 
+// Sizes / colors: [{ id?, label, stock }]. Returns an array (or null if the form did not send any) or { error }.
+function parseVariants(b) {
+  if (b.variants === undefined) return null;
+  if (!Array.isArray(b.variants)) return { error: 'Options are invalid.' };
+  if (b.variants.length > 40) return { error: 'Please use 40 options or fewer.' };
+  const seen = new Set(); const out = [];
+  for (const v of b.variants) {
+    const label = clean(v && v.label, 60);
+    const stock = parseInt(v && v.stock, 10);
+    if (!label) return { error: 'Every option needs a name (for example "Large").' };
+    if (!Number.isInteger(stock) || stock < 0) return { error: `Stock for "${label}" must be 0 or more.` };
+    if (seen.has(label.toLowerCase())) return { error: `The option "${label}" is listed twice.` };
+    seen.add(label.toLowerCase());
+    out.push({ id: parseInt(v.id, 10) || null, label, stock });
+  }
+  return out;
+}
+// Make the product's options match the list. Product stock becomes the total of its options.
+async function syncVariants(client, productId, list, plainStock) {
+  const cur = await client.query('SELECT id FROM product_variants WHERE product_id=$1', [productId]);
+  const have = new Set(cur.rows.map((r) => r.id));
+  const keep = new Set(list.filter((v) => v.id && have.has(v.id)).map((v) => v.id));
+  for (const id of have) if (!keep.has(id)) await client.query('DELETE FROM product_variants WHERE id=$1', [id]);
+  // move kept names out of the way first so two options can swap names
+  for (const id of keep) await client.query("UPDATE product_variants SET label = label || '#' || id WHERE id=$1", [id]);
+  for (const v of list) {
+    if (v.id && keep.has(v.id)) await client.query('UPDATE product_variants SET label=$1, stock=$2 WHERE id=$3', [v.label, v.stock, v.id]);
+    else await client.query('INSERT INTO product_variants (product_id,label,stock) VALUES ($1,$2,$3)', [productId, v.label, v.stock]);
+  }
+  const total = list.length ? list.reduce((n, v) => n + v.stock, 0) : plainStock;
+  await client.query('UPDATE products SET stock=$1 WHERE id=$2', [total, productId]);
+}
+async function productWithVariants(client, id) {
+  return (await client.query(`SELECT *, ${VARIANTS_SQL} FROM products WHERE id=$1`, [id])).rows[0];
+}
+
 app.post('/api/admin/products', auth, adminOnly, wrap(async (req, res) => {
   const p = productFields(req.body);
+  const vars = parseVariants(req.body);
+  if (vars && vars.error) return bad(res, vars.error);
+  if (vars && vars.length) p.stock = vars.reduce((n, v) => n + v.stock, 0);
   const err = checkProduct(p);
   if (err) return bad(res, err);
+  const client = await pool.connect();
   try {
-    const r = await query(
+    await client.query('BEGIN');
+    const r = await client.query(
       `INSERT INTO products (name,sku,category,description,price,stock,low_stock_alert,image_url,active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
       [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active]);
-    res.json({ product: r.rows[0] });
-  } catch (e) { if (e.code === '23505') return bad(res, 'That SKU already exists.', 409); throw e; }
+    if (vars && vars.length) await syncVariants(client, r.rows[0].id, vars, p.stock);
+    const product = await productWithVariants(client, r.rows[0].id);
+    await client.query('COMMIT');
+    res.json({ product });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.code === '23505') return bad(res, 'That SKU already exists.', 409);
+    throw e;
+  } finally { client.release(); }
 }));
 
 app.put('/api/admin/products/:id', auth, adminOnly, wrap(async (req, res) => {
+  const id = parseInt(req.params.id, 10);
   const p = productFields(req.body);
+  const vars = parseVariants(req.body);
+  if (vars && vars.error) return bad(res, vars.error);
+  if (vars && vars.length) p.stock = vars.reduce((n, v) => n + v.stock, 0);
   const err = checkProduct(p);
   if (err) return bad(res, err);
+  const client = await pool.connect();
   try {
-    const r = await query(
-      `UPDATE products SET name=$1,sku=$2,category=$3,description=$4,price=$5,stock=$6,low_stock_alert=$7,image_url=$8,active=$9 WHERE id=$10 RETURNING *`,
-      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active, req.params.id]);
-    if (!r.rows.length) return bad(res, 'Product not found.', 404);
-    res.json({ product: r.rows[0] });
-  } catch (e) { if (e.code === '23505') return bad(res, 'That SKU already exists.', 409); throw e; }
+    await client.query('BEGIN');
+    const lock = await client.query('SELECT id FROM products WHERE id=$1 FOR UPDATE', [id]);
+    if (!lock.rows.length) { await client.query('ROLLBACK'); return bad(res, 'Product not found.', 404); }
+    await client.query(
+      `UPDATE products SET name=$1,sku=$2,category=$3,description=$4,price=$5,stock=$6,low_stock_alert=$7,image_url=$8,active=$9 WHERE id=$10`,
+      [p.name, p.sku, p.category, p.description, p.price, p.stock, Number.isInteger(p.low) ? p.low : 5, p.image, p.active, id]);
+    if (vars) await syncVariants(client, id, vars, p.stock);
+    else await client.query('UPDATE products p SET stock=(SELECT COALESCE(SUM(v.stock),0) FROM product_variants v WHERE v.product_id=p.id) WHERE p.id=$1 AND EXISTS (SELECT 1 FROM product_variants v WHERE v.product_id=p.id)', [id]);
+    const product = await productWithVariants(client, id);
+    await client.query('COMMIT');
+    res.json({ product });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    if (e.code === '23505') return bad(res, e.constraint && /sku/i.test(e.constraint) ? 'That SKU already exists.' : 'Two options have the same name.', 409);
+    throw e;
+  } finally { client.release(); }
 }));
 
 // Soft-delete (hide) so old orders keep their history
@@ -391,11 +479,13 @@ app.put('/api/admin/orders/:id', auth, adminOnly, wrap(async (req, res) => {
     const newPay = ['paid', 'unpaid'].includes(payment_status) ? payment_status : o.payment_status;
     // Put stock back when an order gets cancelled (and take it again if un-cancelled)
     if (newStatus === 'cancelled' && o.status !== 'cancelled') {
-      await client.query('UPDATE products p SET stock = p.stock + i.qty FROM order_items i WHERE i.order_id=$1 AND i.product_id=p.id', [o.id]);
+      await adjustOrderStock(client, o.id, +1);
     } else if (o.status === 'cancelled' && newStatus !== 'cancelled') {
-      const chk = await client.query('SELECT 1 FROM order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=$1 AND p.stock < i.qty', [o.id]);
+      const chk = await client.query(
+        `SELECT 1 FROM (SELECT product_id, SUM(qty)::int q FROM order_items WHERE order_id=$1 AND variant_id IS NULL GROUP BY product_id) s JOIN products p ON p.id=s.product_id WHERE p.stock < s.q
+         UNION ALL SELECT 1 FROM (SELECT variant_id, SUM(qty)::int q FROM order_items WHERE order_id=$1 AND variant_id IS NOT NULL GROUP BY variant_id) s JOIN product_variants v ON v.id=s.variant_id WHERE v.stock < s.q`, [o.id]);
       if (chk.rows.length) { await client.query('ROLLBACK'); return bad(res, 'Not enough stock to reopen this order.'); }
-      await client.query('UPDATE products p SET stock = p.stock - i.qty FROM order_items i WHERE i.order_id=$1 AND i.product_id=p.id', [o.id]);
+      await adjustOrderStock(client, o.id, -1);
     }
     await client.query('UPDATE orders SET status=$1, payment_status=$2 WHERE id=$3', [newStatus, newPay, o.id]);
     await client.query('COMMIT');
